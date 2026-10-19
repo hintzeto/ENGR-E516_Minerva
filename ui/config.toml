@@ -1,0 +1,20 @@
+# Theme and server settings for Minerva.
+# Streamlit reads this file automatically when you run `streamlit run app.py`
+# from the minerva/ folder.
+
+[theme]
+base = "light"
+primaryColor = "#3B4CCA"             # indigo accent for buttons and links
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F5FA" # sidebar and card backgrounds
+textColor = "#1F2430"
+font = "sans serif"
+
+[server]
+headless = true                      # don't try to open a browser (needed on a VM)
+address = "0.0.0.0"                  # listen on all interfaces so others can connect
+port = 8501
+maxUploadSize = 50                   # MB
+
+[browser]
+gatherUsageStats = false
