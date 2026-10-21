@@ -19,11 +19,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
-# ---- The one-line switch ---------------------------------------------------
-# True  -> backend.py returns realistic fake data (fully demoable, no servers)
-# False -> backend.py sends HTTP requests to BACKEND_API_URL
-USE_MOCK_BACKEND = _env_bool("USE_MOCK_BACKEND", True)
+# BACKEND_MODE: "mock" (fake data), "openai" (call a model directly), "api" (our backend)
+_legacy_mock = _env_bool("USE_MOCK_BACKEND", True)
+BACKEND_MODE = os.getenv("BACKEND_MODE", "mock" if _legacy_mock else "api").strip().lower()
+if BACKEND_MODE not in ("mock", "openai", "api"):
+    raise ValueError(f"BACKEND_MODE must be mock, openai or api (got {BACKEND_MODE!r})")
+USE_MOCK_BACKEND = BACKEND_MODE == "mock"
+USE_OPENAI = BACKEND_MODE == "openai"
 
+# OpenAI-compatible model settings (only used when BACKEND_MODE=openai)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# Empty = api.openai.com. For SGLang/llama.cpp on Jetstream2: http://<gpu-vm>:30000/v1
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
 # ---- Real backend settings (only used when USE_MOCK_BACKEND is False) ------
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))

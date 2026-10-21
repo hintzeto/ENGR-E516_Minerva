@@ -4,8 +4,10 @@ backend.py - EVERY call from the UI to the "brain" of Minerva lives in this file
 The pages never talk to LangGraph, the vector DB, or the LLM directly. They only
 call the functions below. That means:
 
-  * Right now (USE_MOCK_BACKEND = True) the functions return realistic FAKE data
+  * BACKEND_MODE=mock (default): the functions return realistic FAKE data
     so the whole UI can be demoed without any servers.
+  * BACKEND_MODE=openai: the functions call an OpenAI-compatible model directly
+    (OpenAI now; SGLang / llama.cpp on JetStream2 later via OPENAI_BASE_URL).
   * Later, teammates replace the bodies (or just flip USE_MOCK_BACKEND to False
     and implement the matching HTTP endpoints) and the UI keeps working unchanged.
 
@@ -73,7 +75,158 @@ def _check_user(user_id: str) -> None:
 
 
 # =============================================================================
-# REAL BACKEND HELPERS (used only when USE_MOCK_BACKEND is False)
+# OPENAI HELPERS (used only when BACKEND_MODE=openai)
+# =============================================================================
+# This mode talks to any OpenAI-compatible chat API. Today that's OpenAI itself;
+# later the same code reaches SGLang / llama.cpp on JetStream2 by changing
+# OPENAI_BASE_URL. There's no vector DB yet, so "RAG" here is a stand-in: the
+# text of the student's uploaded materials is pasted into the prompt.
+
+_MAX_CHARS_PER_FILE = 20_000   # text kept per uploaded file
+_MAX_CONTEXT_CHARS = 40_000    # total course-material text sent per question
+_openai_client = None
+
+TUTOR_SYSTEM_PROMPT = """You are Minerva, a tutor for graduate students in {course}.
+Guide the student toward understanding instead of handing over answers:
+- Ask what they have tried, give hints, and break problems into steps.
+- If the question looks like a graded assignment, do NOT give the full solution;
+  explain the concepts and offer a next step instead.
+- Explain concepts fully when the student asks for an explanation of a concept.
+- When course materials are provided below, ground your answer in them and name
+  the file you used. If they don't cover the question, say so.
+Use Markdown. Keep answers focused."""
+
+PLANNER_SYSTEM_PROMPT = """You are Minerva's resource-management assistant for a graduate student.
+Help them pace their work, prioritize deadlines, and plan use of resources such as
+study time, professor office hours, and compute time. Today is {today}.
+Be concrete: propose dated time blocks, flag conflicts, and keep it realistic.
+Use Markdown."""
+
+FEEDBACK_SYSTEM_PROMPT = """You are Minerva, giving a graduate student feedback on a draft.
+Be specific, honest, and constructive; refer to concrete parts of the submission.
+If a rubric or prompt is provided, evaluate against it.
+Reply with ONLY a JSON object with these keys:
+  "summary": a 2-3 sentence overall assessment (string),
+  "strengths": list of strings,
+  "improvements": list of strings,
+  "suggestions": list of concrete next steps (strings)."""
+
+
+def _client():
+    """Create the OpenAI client once per server process and reuse it."""
+    global _openai_client
+    if _openai_client is None:
+        if not config.OPENAI_API_KEY:
+            raise BackendError("The AI model isn't configured (OPENAI_API_KEY is missing).")
+        from openai import OpenAI  # imported here so other modes don't need it
+
+        _openai_client = OpenAI(
+            api_key=config.OPENAI_API_KEY,
+            base_url=config.OPENAI_BASE_URL,
+            timeout=config.REQUEST_TIMEOUT_SECONDS,
+        )
+    return _openai_client
+
+
+def _openai_error(err: Exception) -> BackendError:
+    """Turn an OpenAI SDK exception into a message that's safe to show students."""
+    import openai
+
+    if isinstance(err, openai.AuthenticationError):
+        return BackendError("The AI model rejected our API key. Check OPENAI_API_KEY.")
+    if isinstance(err, openai.RateLimitError):
+        return BackendError("The AI model is busy or out of quota. Please try again shortly.")
+    if isinstance(err, (openai.APIConnectionError, openai.APITimeoutError)):
+        return BackendError("Can't reach the AI model right now. Please try again shortly.")
+    if isinstance(err, openai.APIStatusError):
+        return BackendError(f"The AI model returned an error ({err.status_code}).")
+    return BackendError("The AI model failed unexpectedly. Please try again.")
+
+
+def _openai_stream(messages: list[dict]) -> Iterator[str]:
+    """
+    Start a streaming chat completion and return a generator of text pieces.
+
+    The request is sent BEFORE returning, so connection/auth errors raise
+    BackendError here, where the pages already catch it.
+    """
+    import openai
+
+    try:
+        stream = _client().chat.completions.create(
+            model=config.OPENAI_MODEL, messages=messages, stream=True,
+        )
+    except openai.OpenAIError as err:
+        raise _openai_error(err) from err
+
+    def _gen() -> Iterator[str]:
+        try:
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except openai.OpenAIError:
+            yield "\n\n_(The answer was cut off by a connection problem. Please try again.)_"
+
+    return _gen()
+
+
+def _extract_text(file) -> str:
+    """Best-effort plain text from an uploaded file (txt/md/code, pdf, docx, pptx, ipynb)."""
+    import io
+    import json
+
+    name = file.name.lower()
+    data = file.getvalue()
+    try:
+        if name.endswith(".pdf"):
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(data))
+            text = "\n".join(
+                f"[page {i}]\n{page.extract_text() or ''}"
+                for i, page in enumerate(reader.pages, start=1)
+            )
+        elif name.endswith(".docx"):
+            from docx import Document
+
+            text = "\n".join(p.text for p in Document(io.BytesIO(data)).paragraphs)
+        elif name.endswith(".pptx"):
+            from pptx import Presentation
+
+            slides = []
+            for i, slide in enumerate(Presentation(io.BytesIO(data)).slides, start=1):
+                parts = [s.text_frame.text for s in slide.shapes if s.has_text_frame]
+                slides.append(f"[slide {i}]\n" + "\n".join(parts))
+            text = "\n".join(slides)
+        elif name.endswith(".ipynb"):
+            cells = json.loads(data).get("cells", [])
+            text = "\n\n".join("".join(c.get("source", [])) for c in cells)
+        else:
+            text = data.decode("utf-8", errors="replace")
+    except Exception:
+        raise BackendError(f"Couldn't read the text in {file.name}. Is the file valid?")
+    return text.strip()[:_MAX_CHARS_PER_FILE]
+
+
+def _material_context(user_id: str, course: str) -> tuple[str, list[dict]]:
+    """Gather this user's uploaded text for a course, capped in size, plus a source list."""
+    with _MOCK_LOCK:
+        mine = [m for m in _MOCK_MATERIALS.get(user_id, [])
+                if m.get("course") in (course, "Unassigned") and m.get("text")]
+    blocks, sources, used = [], [], 0
+    for m in mine:
+        piece = m["text"][: _MAX_CONTEXT_CHARS - used]
+        if not piece:
+            break
+        blocks.append(f"### File: {m['name']}\n{piece}")
+        sources.append({"file": m["name"], "page": "—",
+                        "snippet": "Full text included as course context."})
+        used += len(piece)
+    return "\n\n".join(blocks), sources
+
+
+# =============================================================================
+# REAL BACKEND HELPERS (used only when BACKEND_MODE=api)
 # =============================================================================
 def _http_post(path: str, **kwargs):
     """POST to the real backend and turn network problems into BackendError."""
@@ -179,6 +332,14 @@ def chat_with_tutor(user_id: str, course: str, messages: list[dict]):
         )
         return sources, _stream_text(answer)
 
+    if config.USE_OPENAI:
+        context, sources = _material_context(user_id, course)
+        system = TUTOR_SYSTEM_PROMPT.format(course=course)
+        if context:
+            system += "\n\n## Course materials uploaded by the student\n" + context
+        stream = _openai_stream([{"role": "system", "content": system}, *messages])
+        return sources, stream
+
     # ---- REAL BACKEND -------------------------------------------------------
     # TODO (tutor agent teammate): POST to your LangGraph tutoring agent.
     #   The agent should: (1) retrieve top-k chunks for `course` from the vector
@@ -252,6 +413,21 @@ def plan_resources(user_id: str, tasks: list[dict], message: str):
         )
         return _stream_text("\n".join(lines))
 
+    if config.USE_OPENAI:
+        if tasks:
+            task_lines = "\n".join(
+                f"- {t['title']} ({t['course']}), due {t['due']}, about {t['hours']:g} h"
+                for t in sorted(tasks, key=lambda t: t["due"])
+            )
+        else:
+            task_lines = "(no tasks in the planner yet)"
+        system = PLANNER_SYSTEM_PROMPT.format(today=datetime.now().strftime("%A, %Y-%m-%d"))
+        user_msg = f"My planner tasks:\n{task_lines}\n\n{message}"
+        return _openai_stream([
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg},
+        ])
+
     # ---- REAL BACKEND -------------------------------------------------------
     # TODO (resource agent teammate): call your LangGraph scheduling agent. It can
     #   use tools for calendar data, professor office hours, and compute quotas.
@@ -316,6 +492,45 @@ def get_feedback(user_id: str, file, prompt: str) -> dict:
             "sources": _DEFAULT_SOURCES,
         }
 
+    if config.USE_OPENAI:
+        import json
+
+        import openai
+
+        text = _extract_text(file)
+        if not text:
+            raise BackendError(f"{file.name} doesn't contain any readable text.")
+        user_msg = (
+            f"Assignment prompt / rubric:\n{prompt.strip() if prompt else '(none provided)'}"
+            f"\n\nSubmission ({file.name}):\n{text}"
+        )
+        try:
+            resp = _client().chat.completions.create(
+                model=config.OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": FEEDBACK_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                response_format={"type": "json_object"},
+            )
+        except openai.OpenAIError as err:
+            raise _openai_error(err) from err
+        try:
+            result = json.loads(resp.choices[0].message.content or "{}")
+        except json.JSONDecodeError:
+            raise BackendError("The AI model returned feedback in an unexpected format. Try again.")
+
+        def _as_list(value) -> list[str]:
+            return [str(v) for v in value] if isinstance(value, list) else []
+
+        return {
+            "summary": str(result.get("summary", "")),
+            "strengths": _as_list(result.get("strengths")),
+            "improvements": _as_list(result.get("improvements")),
+            "suggestions": _as_list(result.get("suggestions")),
+            "sources": [],
+        }
+
     # ---- REAL BACKEND -------------------------------------------------------
     # TODO (feedback agent teammate): the agent should extract text from the file,
     #   retrieve relevant course material (RAG), and have the LLM return the JSON
@@ -342,8 +557,11 @@ def upload_course_material(user_id: str, file, course: str | None = None) -> dic
     if file is None:
         raise BackendError("No file was selected.")
 
-    if config.USE_MOCK_BACKEND:
-        time.sleep(0.5)  # pretend we're chunking + embedding
+    # OpenAI mode has no vector DB yet, so it reuses the in-memory store and also
+    # keeps the extracted text, which the tutor pastes into its prompt.
+    if config.USE_MOCK_BACKEND or config.USE_OPENAI:
+        if config.USE_MOCK_BACKEND:
+            time.sleep(0.5)  # pretend we're chunking + embedding
         record = {
             "id": uuid.uuid4().hex[:8],
             "name": file.name,
@@ -351,8 +569,11 @@ def upload_course_material(user_id: str, file, course: str | None = None) -> dic
             "course": course or "Unassigned",
             "uploaded": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
+        stored = dict(record)
+        if config.USE_OPENAI:
+            stored["text"] = _extract_text(file)
         with _MOCK_LOCK:
-            _MOCK_MATERIALS.setdefault(user_id, []).append(record)
+            _MOCK_MATERIALS.setdefault(user_id, []).append(stored)
         return record
 
     # ---- REAL BACKEND -------------------------------------------------------
@@ -370,9 +591,11 @@ def list_course_materials(user_id: str) -> list[dict]:
     """Return all materials this user has uploaded (list of record dicts)."""
     _check_user(user_id)
 
-    if config.USE_MOCK_BACKEND:
+    if config.USE_MOCK_BACKEND or config.USE_OPENAI:
         with _MOCK_LOCK:
-            return list(_MOCK_MATERIALS.get(user_id, []))
+            # Return metadata only; the stored text stays server-side.
+            return [{k: v for k, v in m.items() if k != "text"}
+                    for m in _MOCK_MATERIALS.get(user_id, [])]
 
     # TODO (RAG teammate): query your metadata store for this user's documents.
     return _http_get("/materials", params={"user_id": user_id}).json()
@@ -382,7 +605,7 @@ def delete_course_material(user_id: str, file_id: str) -> bool:
     """Delete one material (and its vectors, in the real backend). True on success."""
     _check_user(user_id)
 
-    if config.USE_MOCK_BACKEND:
+    if config.USE_MOCK_BACKEND or config.USE_OPENAI:
         with _MOCK_LOCK:
             items = _MOCK_MATERIALS.get(user_id, [])
             remaining = [m for m in items if m["id"] != file_id]
