@@ -66,7 +66,7 @@ The older `USE_MOCK_BACKEND=false` still works and means `api`.
 
 ### Switching to Jetstream2
 
-SGLang and llama.cpp both serve the same OpenAI-compatible API, so moving from OpenAI
+SGLang serves the same OpenAI-compatible API, so moving from OpenAI
 to our own GPU instance only changes `ui/.env`:
 
 ```
@@ -75,8 +75,7 @@ OPENAI_MODEL=<model name the server reports>
 OPENAI_API_KEY=anything-non-empty
 ```
 
-The URL ends in `/v1`. SGLang's default port is `30000`; llama.cpp's server uses
-`8080`. No code changes are needed.
+The URL ends in `/v1`. SGLang's default port is `30000`; No code changes are needed.
 
 ## Login
 
@@ -155,3 +154,4 @@ and the `Upgrade` / `Connection "upgrade"` headers.
 - In `openai` mode, uploads are pasted into the prompt in full (up to 40,000
   characters per question) rather than retrieved by relevance. Large materials are cut
   off, and long prompts cost more tokens.
+- Could not get gpt4o-mini api key to work for free. Not sure if anyone knows of a way to get free tokens but any openai api key should       work for this. 
