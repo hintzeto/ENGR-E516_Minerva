@@ -1,157 +1,198 @@
-# Minerva - Frontend
+# Minerva Tutor
 
-Streamlit frontend for **Minerva**, a cloud AI assistant for graduate students
-(IU ENGR-E516). It has three AI-backed features plus course-material management:
+Minerva Frontend - Tutor feature. Just a test for reliable OpenAI streaming. Once this
+is tested, we can added course materials context. 
+
+This branch contains **only the Tutor**. The Resource Management, Feedback, and Course
+Materials features live on the `claude-vibe-full-project` branch.
 
 | Page | What it does |
 |------|--------------|
-| Home | Overview and quick links |
-| Resource Management | Task planner, weekly view, "Generate study plan", assistant chat |
-| Tutor | Course-aware chat with streamed answers and expandable Sources |
-| Feedback | Upload a submission + rubric, get strengths / improvements / suggestions |
-| Course Materials | Upload, list, and delete documents used by the tutor |
+| Home | Overview |
+| Tutor | Course-aware chat with streamed answers. Each course keeps its own chat history. |
 
-**To install and run the app, see the [root README](../README.md).** This file covers
-how the frontend works.
+## How it works
 
-## File structure
+```
+Browser ──▶ Streamlit (ui/) ──▶ backend.py ──▶ mock text, an OpenAI-compatible model, or our API
+```
+
+The pages never call a model directly. Every request goes through one function in
+`backend.py`:
+
+```python
+chat_with_tutor(user_id, course, messages) -> (sources, token_stream)
+```
+
+- `messages` is the full chat history: `[{"role": "user" | "assistant", "content": "..."}]`
+- `sources` is a list of `{"file": str, "page": int | str, "snippet": str}`, shown under
+  each answer. Empty for now. 
+- `token_stream` is a generator of text pieces, rendered with `st.write_stream`
+
+`BACKEND_MODE` decides where answers come from:
+
+| Mode | Where the answer comes from | Needs |
+|------|-----------------------------|-------|
+| `mock` (default) | A fixed, built-in answer. Nothing is sent anywhere. | Nothing |
+| `openai` | Any OpenAI-compatible chat API: OpenAI, or SGLang / llama.cpp on Jetstream2 | A base URL and model name (and a key for OpenAI) |
+| `api` | Our own backend's `/tutor/chat` endpoint | `BACKEND_API_URL` |
+
+In `openai` mode the chat history is sent to the model **as is, with no system prompt**,
+and the tutor returns no sources. The model's own defaults decide how it answers, so it
+will answer graded questions directly rather than giving hints.
+
+## Files
 
 ```
 ui/
-  app.py                  # entry point: login + sidebar navigation
-  config.py               # BACKEND_MODE, model settings, courses, file types
-  backend.py              # ALL backend calls (mock, OpenAI, or our API)
-  state.py                # per-user session state + login placeholder
+  app.py              # entry point: login + navigation (Home, Tutor)
+  config.py           # BACKEND_MODE, model settings, course list
+  backend.py          # chat_with_tutor() and its helpers
+  state.py            # per-session state and the username-only login
   pages/
-    home.py  resources.py  tutor.py  feedback.py  materials.py
-  config.toml             # theme + server settings (copied to .streamlit/ in Docker)
-  requirements.txt
-  Dockerfile  .dockerignore
-  .env.example            # template for .env (the real .env is never committed)
+    home.py
+    tutor.py
+  config.toml         # theme + server settings (copied to .streamlit/ in Docker)
+  requirements.txt    # streamlit, requests, openai
+  Dockerfile
+  .dockerignore
+  .env.example        # template for ui/.env
 ```
 
-## Backend modes
+## Configure `ui/.env`
 
-`BACKEND_MODE` (set in `ui/.env`) decides where answers come from:
+```bash
+cp ui/.env.example ui/.env
+```
 
-| Mode | What happens |
-|------|--------------|
-| `mock` (default) | Fake but realistic data. No servers or keys needed. |
-| `openai` | Calls an OpenAI-compatible model directly from the UI. |
-| `api` | Sends HTTP requests to our own backend at `BACKEND_API_URL`. |
-
-The older `USE_MOCK_BACKEND=false` still works and means `api`.
-
-### What `openai` mode does
-
-- **Tutor** streams real answers. A system prompt adds guardrails: hints and steps
-  rather than full solutions on graded work.
-- **Resource Management** sends the planner's task list and the student's message,
-  and streams a study plan.
-- **Course Materials** extracts text from uploads (PDF, DOCX, PPTX, text, code,
-  notebooks). The tutor includes that text in its prompt for the matching course and
-  lists the files under Sources. This is a stand-in for RAG until the vector DB exists;
-  materials are kept in memory and reset when the app restarts.
-- **Feedback** sends the submission and rubric and asks the model for JSON, which
-  fills the strengths / improvements / suggestions cards.
-
-### Model settings
+`ui/.env` is git-ignored; never commit it.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `OPENAI_API_KEY` | none | Required in `openai` mode |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Any chat model the endpoint serves |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Used when empty or unset |
-| `REQUEST_TIMEOUT_SECONDS` | `60` | Per request |
+| `BACKEND_MODE` | `mock` | `mock`, `openai`, or `api` |
+| `OPENAI_API_KEY` | none | Required for OpenAI. For a self-hosted server that doesn't check keys, use any placeholder such as `not-needed`. |
+| `OPENAI_MODEL` | `gpt-4o-mini` | For a self-hosted server, the `id` from `GET /v1/models` |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Leave empty for OpenAI |
+| `BACKEND_API_URL` | `http://localhost:8000` | Only for `api` mode |
+| `REQUEST_TIMEOUT_SECONDS` | `60` | Raise it (e.g. `180`) for slow self-hosted models |
 
-### Switching to Jetstream2
+Rules: one `KEY=value` per line, no quotes, no spaces around `=`, and no comments on the
+same line as a value.
 
-SGLang serves the same OpenAI-compatible API, so moving from OpenAI
-to our own GPU instance only changes `ui/.env`:
+**Example: OpenAI**
 
 ```
-OPENAI_BASE_URL=http://<gpu-vm-private-ip>:30000/v1
-OPENAI_MODEL=<model name the server reports>
-OPENAI_API_KEY=anything-non-empty
+BACKEND_MODE=openai
+OPENAI_API_KEY=sk-your-key
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_BASE_URL=
 ```
 
-The URL ends in `/v1`. SGLang's default port is `30000`; No code changes are needed.
+**Example: a model on Jetstream2**
 
-## Login
+```
+BACKEND_MODE=openai
+OPENAI_API_KEY=not-needed
+OPENAI_MODEL=<model id from /v1/models>
+OPENAI_BASE_URL=http://<gpu-vm-private-ip>:<port>/v1
+```
 
-The login is a placeholder: it asks for a username only, with no password. Any name
-works, and each name gets its own chat history, tasks, and materials.
+SGLang's default port is `30000`; llama.cpp's server uses `8080`. Check the server is
+reachable from the frontend VM first:
 
-For real auth (e.g. IU login through OIDC with Streamlit's `st.login()`), replace
-`state.login()` and the form in `app.py`. The rest of the app only relies on
-`st.session_state["user_id"]`.
+```bash
+curl http://<gpu-vm-private-ip>:<port>/v1/models
+```
 
-## Guide for teammates: plugging in the real backend
+## Run with Docker
 
-Every UI call goes through `backend.py`. The pages never import LangGraph, a vector
-DB, or an LLM client. To go live:
+From the repo root:
 
-1. Set `BACKEND_MODE=api` and `BACKEND_API_URL=http://<backend-host>:8000` in `ui/.env`.
-2. **Either** implement HTTP endpoints matching the `# REAL BACKEND` sections in
-   `backend.py` (e.g. FastAPI wrapping your LangGraph agents), **or** edit those
-   sections to call your agents directly.
-3. Keep the **function signatures and return shapes** the same:
+```bash
+docker build -t minerva-tutor ./ui
+docker run -d --name minerva-tutor -p 8501:8501 \
+  --env-file ui/.env --restart unless-stopped minerva-tutor
+```
 
-| Function | Returns | Plug in |
-|----------|---------|---------|
-| `chat_with_tutor(user_id, course, messages)` | `(sources, token_stream)` | Tutor agent: retrieve chunks for the course, apply guardrails, stream from llama.cpp/SGLang |
-| `plan_resources(user_id, tasks, message)` | `token_stream` | Resource agent: calendar/office-hours/compute tools |
-| `get_feedback(user_id, file, prompt)` | dict with `summary`, `strengths`, `improvements`, `suggestions`, `sources` | Feedback agent: extract text, RAG, rubric-aware LLM; ask for JSON |
-| `upload_course_material(user_id, file, course)` | record dict (`id`, `name`, `size_kb`, `course`, `uploaded`) | Chunk, embed, store in vector DB tagged by user + course |
-| `list_course_materials(user_id)` | list of record dicts | Metadata store query |
-| `delete_course_material(user_id, file_id)` | `bool` | Delete file AND its vectors |
+Open `http://localhost:8501` (or `http://<floating-ip>:8501` on Jetstream2) and log in
+with any username.
 
-Details:
+To try it without a `.env` file, replace `--env-file ui/.env` with `-e BACKEND_MODE=mock`.
 
-- A **token stream** is any Python generator that yields strings; the UI renders it
-  with `st.write_stream`. See `_openai_stream()` in `backend.py` for a working
-  example against an OpenAI-compatible API.
-- A **source** is `{"file": str, "page": int | str, "snippet": str}`.
-- On any failure, `raise BackendError("friendly message")`. The pages catch it and
-  show the message instead of crashing. For streams, raise *before* returning the
-  generator, so errors land inside the pages' `try` blocks.
-- `file` arguments are Streamlit `UploadedFile` objects: `.name`, `.type`,
-  `.getvalue()` (bytes).
-- Search the code for `TODO` to find every integration point.
-- The course list in `config.COURSES` is hard-coded; replace it with a backend call
-  when real courses exist.
+**Useful commands**
 
-## Concurrency
+```bash
+docker logs -f minerva-tutor                                     # live output
+docker exec minerva-tutor env | grep -E "BACKEND|OPENAI_MODEL"   # check settings
+docker rm -f minerva-tutor                                       # stop and remove
+```
 
-Streamlit runs each browser session in its own thread with its own
-`st.session_state`, so 10+ concurrent users do not share state. The shared materials
-store is keyed by `user_id` and lock-protected. The OpenAI client is created once and
-shared, which is safe across threads.
+**After changing `.env` or pulling new code**, replace the container. A running container
+doesn't pick up changes on its own:
 
-## Deploying on Jetstream2
+```bash
+docker rm -f minerva-tutor
+docker build -t minerva-tutor ./ui
+docker run -d --name minerva-tutor -p 8501:8501 \
+  --env-file ui/.env --restart unless-stopped minerva-tutor
+```
 
-Use Docker on a CPU instance (`m3.small` is enough for the frontend):
+## Run without Docker
 
-1. Create an Ubuntu instance and note its floating IP.
-2. In its Security Group, allow TCP **8501** (ideally restricted to the IU network or
-   your IP) and SSH (22).
-3. Install Docker, clone the repo, create `ui/.env`, and run
-   `docker compose up -d --build`. The `restart: unless-stopped` setting keeps it running
-   after reboots.
-4. Visit `http://<floating-ip>:8501`.
+Requires Python 3.10 or newer.
 
-This serves plain HTTP. Before real use, put it behind HTTPS (e.g. Caddy or nginx).
-Behind nginx, the Streamlit location needs WebSocket support: `proxy_http_version 1.1`
-and the `Upgrade` / `Connection "upgrade"` headers.
+```bash
+cd ui
+python3 -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+mkdir -p .streamlit && cp config.toml .streamlit/config.toml
+set -a; source .env; set +a          # load ui/.env; Streamlit doesn't read it on its own
+streamlit run app.py
+```
 
-## Known limits of the prototype
+If you skip the `source .env` step, the app silently falls back to `mock` mode.
 
-- The login has no password, so anyone who can reach the page can use it. Restrict
-  port 8501 in the Security Group until real auth exists.
-- Chat history, tasks, and feedback live in `st.session_state`, so they reset when the
-  browser tab is closed or refreshed. Persist them in the backend/DB for real use.
-- Uploaded materials are stored in server memory and reset when the app restarts.
-- In `openai` mode, uploads are pasted into the prompt in full (up to 40,000
-  characters per question) rather than retrieved by relevance. Large materials are cut
-  off, and long prompts cost more tokens.
-- Could not get gpt4o-mini api key to work for free. Not sure if anyone knows of a way to get free tokens but any openai api key should       work for this. 
+## Connecting the team's backend (`api` mode)
+
+Set `BACKEND_MODE=api` and `BACKEND_API_URL`. The frontend then sends:
+
+```
+POST {BACKEND_API_URL}/tutor/chat
+Content-Type: application/json
+
+{"user_id": "ale", "course": "ENGR-E516: Cloud Computing",
+ "messages": [{"role": "user", "content": "What is a pod?"}]}
+```
+
+and expects a streamed response where:
+
+1. The **first line** is JSON with the sources: `{"sources": [...]}` (use `{"sources": []}` if none)
+2. **Every following line** is answer text, displayed as it arrives
+
+If your backend responds differently, adjust the `# REAL BACKEND` section of
+`chat_with_tutor()` in `backend.py`. Keep its return value the same, `(sources,
+token_stream)`, so `pages/tutor.py` doesn't need to change.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---------|---------------|
+| Every answer is the same "Great question about..." text | The app is in `mock` mode. Check `BACKEND_MODE` inside the container (see above), and that you started it with `--env-file ui/.env`. |
+| "Can't reach the AI model right now" | Wrong or unreachable `OPENAI_BASE_URL`, or the request took longer than `REQUEST_TIMEOUT_SECONDS`. Test with `curl .../v1/models`. |
+| "The AI model is busy or out of quota" | OpenAI account has no credits, or a rate limit was hit. |
+| "The AI model rejected our API key" | Wrong or revoked `OPENAI_API_KEY`. |
+| "OPENAI_API_KEY is missing" | Set a key, or a placeholder for self-hosted servers. |
+| "Connection error" banner at the top of the browser | The browser lost its connection to Streamlit. Check `docker logs minerva-tutor` for restarts or errors. |
+| `failed to connect to the docker API` | Docker isn't running. |
+
+## Known limits
+
+- **No guardrails.** There's no system prompt, so the tutor doesn't steer students away
+  from asking for graded answers.
+- **No course materials.** Answers aren't grounded in uploaded files, and the course
+  selection isn't sent to the model in `openai` mode.
+- **Placeholder login.** Any username works and there's no password. Restrict port 8501
+  in the Jetstream2 Security Group to trusted IPs.
+- **Chat history isn't saved.** It lives in the browser session and resets on refresh.
+- The course list is hard-coded in `config.COURSES`.

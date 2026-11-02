@@ -34,7 +34,7 @@ def show_login() -> None:
     with middle:
         with st.form("login_form"):
             st.subheader("Log in")
-            username = st.text_input("Username", placeholder="e.g. thintze")
+            username = st.text_input("Username", placeholder="e.g. root")
             submitted = st.form_submit_button("Continue", width="stretch")
         st.caption("Demo login: no password needed. Real authentication comes later.")
 
@@ -65,10 +65,7 @@ with st.sidebar:
 # ---- Navigation (one st.Page per file in /pages) ---------------------------
 pages = [
     st.Page("pages/home.py", title="Home", icon="🏠", default=True),
-    st.Page("pages/resources.py", title="Resource Management", icon="🗓️"),
     st.Page("pages/tutor.py", title="Tutor", icon="🎓"),
-    st.Page("pages/feedback.py", title="Feedback", icon="📝"),
-    st.Page("pages/materials.py", title="Course Materials", icon="📚"),
 ]
 selected_page = st.navigation(pages)
 selected_page.run()

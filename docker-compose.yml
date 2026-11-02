@@ -1,0 +1,8 @@
+services:
+  ui:
+    build: ./ui
+    ports:
+      - "8501:8501"
+    env_file:
+      - ./ui/.env
+    restart: unless-stopped

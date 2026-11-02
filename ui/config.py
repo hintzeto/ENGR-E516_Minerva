@@ -38,7 +38,7 @@ REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))
 
 # ---- UI settings ------------------------------------------------------------
 APP_NAME = "Minerva"
-APP_TAGLINE = "Your AI study partner for graduate school"
+APP_TAGLINE = "Your AI study partner for Graduate School"
 
 # Demo course list. TODO: replace with a backend call once courses are real.
 COURSES = [
@@ -52,4 +52,4 @@ FEEDBACK_FILE_TYPES = ["pdf", "docx", "txt", "md", "py", "java", "c", "cpp", "js
 MATERIAL_FILE_TYPES = ["pdf", "docx", "txt", "md", "pptx"]
 
 # Delay between streamed words in mock mode (seconds). Lower = faster typing.
-MOCK_STREAM_DELAY = 0.03
+MOCK_STREAM_DELAY = 0.02
