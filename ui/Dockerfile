@@ -3,6 +3,9 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
+# Dev - install sqlite3 and curl
+RUN apt-get update && apt-get install -y sqlite3 curl
+
 # Dependencies first, so this layer is cached between code changes
 COPY requirements.txt .
 RUN pip install -r requirements.txt
@@ -11,7 +14,7 @@ COPY . .
 # Streamlit only reads config from .streamlit/config.toml
 RUN mkdir -p .streamlit && cp config.toml .streamlit/config.toml
 
-RUN useradd --create-home minerva && chown -R minerva /app
+RUN useradd --create-home minerva && chown -R minerva:minerva /app
 USER minerva
 
 EXPOSE 8501

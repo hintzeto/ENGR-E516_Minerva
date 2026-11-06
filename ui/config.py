@@ -18,6 +18,8 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return value.strip().lower() in ("1", "true", "yes", "on")
 
+# Database information
+DATABASE_URI = os.getenv("DATABASE_URI", "sqlite:///database.db")
 
 # BACKEND_MODE: "mock" (fake data), "openai" (call a model directly), "api" (our backend)
 _legacy_mock = _env_bool("USE_MOCK_BACKEND", True)
