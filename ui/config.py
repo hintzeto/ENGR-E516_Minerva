@@ -55,3 +55,10 @@ MATERIAL_FILE_TYPES = ["pdf", "docx", "txt", "md", "pptx"]
 
 # Delay between streamed words in mock mode (seconds). Lower = faster typing.
 MOCK_STREAM_DELAY = 0.02
+
+# ---- Retrieval (course materials) ---------------------------------------------
+# Small local embedding model (384 numbers per text). Runs on CPU, no API key.
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+EMBEDDING_CACHE_DIR = os.getenv("EMBEDDING_CACHE_DIR", "/app/models")
+MAX_CHUNK_CHARS = 1200   # long slides/pages are split into pieces of about this size
+MIN_SIMILARITY = 0.55   # below this, say "no good match" instead of showing weak results

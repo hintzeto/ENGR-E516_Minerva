@@ -31,9 +31,9 @@ class User(Base):
 		return f"<User {self.username}>"
 
 
-# Number of numbers in each embedding. It MUST match the embedding model you use
-# (e.g. 1536 for OpenAI text-embedding-3-small). 3 is only for the small demo.
-EMBEDDING_DIM = 3
+# Number of numbers in each embedding. It MUST match the embedding model
+# (BAAI/bge-small-en-v1.5 produces 384).
+EMBEDDING_DIM = 384
 
 
 class CourseChunk(Base):
@@ -43,5 +43,7 @@ class CourseChunk(Base):
 	id: Mapped[int] = mapped_column(Integer, primary_key=True)
 	user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
 	course: Mapped[str] = mapped_column(String(100), nullable=False)
+	filename: Mapped[str] = mapped_column(String(255), nullable=False)
+	page: Mapped[int] = mapped_column(Integer, nullable=False)
 	content: Mapped[str] = mapped_column(Text, nullable=False)
 	embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)

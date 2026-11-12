@@ -8,3 +8,4 @@ sqlalchemy==2.1.8
 Werkzeug==3.1.8
 psycopg[binary]>=3.2
 pgvector>=0.3
+fastembed>=0.4

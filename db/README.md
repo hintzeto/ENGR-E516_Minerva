@@ -14,7 +14,6 @@
 ## Run
 ```bash
 docker compose up -d --build
-docker compose exec ui python db_demo.py
 docker compose exec db psql -U minerva -c "SELECT * FROM users;"
 ```
 App: http://localhost:8501
@@ -22,7 +21,22 @@ App: http://localhost:8501
 Reset everything (deletes data): `docker compose down -v`
 
 ## Notes
-- `EMBEDDING_DIM` in `models.py` is 3 for the demo. Set it to your embedding model's size
-  (e.g. 1536) before storing real embeddings.
+- `EMBEDDING_DIM` in `models.py` (384) must match the embedding model. Changing the model
+  means dropping `course_chunks` and re-uploading.
 - Dev password `minerva` is in `docker-compose.yml`; change it for any shared deployment.
 - With many chunks, add an HNSW index to keep search fast.
+
+## Course material retrieval (the demo)
+Open **Course Materials** in the app, upload PDFs, then ask questions.
+
+| Step | Code | What happens |
+|------|------|--------------|
+| Read | `rag.extract_pages` | pypdf pulls the text of each page (one slide = one chunk) |
+| Split | `rag.split_text` | pages longer than 1200 characters are cut into pieces |
+| Embed | `rag.embed` | local model `bge-small` turns each chunk into 384 numbers |
+| Store | `rag.ingest_pdf` | chunk + file + page + vector go into `course_chunks` |
+| Search | `rag.search` | the question is embedded, Postgres returns the nearest chunks |
+
+Below `MIN_SIMILARITY` (config.py) the page answers "no good match" instead of guessing.
+Good demo questions: grading (syllabus), containers vs VMs (VirtualMachine.pdf),
+the reduce step (map-reduce.pdf), Spark ML libraries (Spark slides), and an off-topic one.
