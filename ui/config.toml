@@ -3,11 +3,11 @@
 # from the minerva/ folder.
 
 [theme]
-base = "light"
-primaryColor = "#3B4CCA"             # indigo accent for buttons and links
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4F5FA" # sidebar and card backgrounds
-textColor = "#1F2430"
+base = "dark"
+primaryColor = "#7C8CFF"             # lighter indigo, readable on dark backgrounds
+backgroundColor = "#0E1117"          # main page background
+secondaryBackgroundColor = "#1C1F2B" # sidebar, cards, and input boxes
+textColor = "#E6E8F0"
 font = "sans serif"
 
 [server]

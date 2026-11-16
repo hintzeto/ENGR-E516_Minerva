@@ -374,3 +374,177 @@ def delete_course_material(user_id: str, file_id: str) -> bool:
     # TODO (RAG teammate): remove the file AND its embedded chunks from the index.
     _http_delete(f"/materials/{file_id}", params={"user_id": user_id})
     return True
+
+# =============================================================================
+# 2) RESOURCE MANAGEMENT  (scheduling / pacing agent)
+# =============================================================================
+def plan_resources(user_id: str, tasks: list[dict], message: str):
+    """
+    Chat with the resource-management assistant, or generate a study plan.
+
+    Args:
+        user_id: who is asking.
+        tasks:   the planner tasks, each like
+                 {"title": str, "course": str, "due": "YYYY-MM-DD", "hours": float}
+        message: what the student typed (or "Generate a study plan" from the button).
+
+    Returns:
+        token_stream - generator yielding pieces of the reply text.
+    """
+    _check_user(user_id)
+    if not message or not message.strip():
+        raise BackendError("Please enter a message first.")
+
+    if config.USE_MOCK_BACKEND:
+        if not tasks:
+            reply = (
+                "I don't see any tasks in your planner yet. Add a few assignments or "
+                "deadlines on the left and I'll build a pacing plan around them."
+            )
+            return _stream_text(reply)
+
+        # Sort by due date and build a believable plan from the real task list.
+        ordered = sorted(tasks, key=lambda t: t["due"])
+        total_hours = sum(t["hours"] for t in ordered)
+        lines = [
+            f"Here's a suggested plan for your **{len(ordered)} task(s)** "
+            f"(about **{total_hours:g} hours** total):\n"
+        ]
+        for t in ordered:
+            lines.append(
+                f"- **{t['title']}** ({t['course']}) - due {t['due']}: "
+                f"start at least {max(1, int(t['hours'] // 2 + 1))} day(s) early, "
+                f"in blocks of about {min(t['hours'], 2):g} h."
+            )
+        lines.append(
+            "\n**Resource tips:** book office hours for the earliest deadline this "
+            "week, and reserve JetStream2 compute time before any heavy experiments."
+        )
+        return _stream_text("\n".join(lines))
+
+    if config.USE_OPENAI:
+        if tasks:
+            task_lines = "\n".join(
+                f"- {t['title']} ({t['course']}), due {t['due']}, about {t['hours']:g} h"
+                for t in sorted(tasks, key=lambda t: t["due"])
+            )
+        else:
+            task_lines = "(no tasks in the planner yet)"
+        system = format(today=datetime.now().strftime("%A, %Y-%m-%d"))
+        user_msg = f"My planner tasks:\n{task_lines}\n\n{message}"
+        return _openai_stream([
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg},
+        ])
+
+    # ---- REAL BACKEND -------------------------------------------------------
+    # TODO (resource agent teammate): call your LangGraph scheduling agent. It can
+    #   use tools for calendar data, professor office hours, and compute quotas.
+    resp = _http_post(
+        "/resources/plan",
+        json={"user_id": user_id, "tasks": tasks, "message": message},
+        stream=True,
+    )
+    return (line + "\n" for line in resp.iter_lines(decode_unicode=True) if line)
+
+# =============================================================================
+# 3) PERSONALIZED FEEDBACK  (RAG + rubric-aware LLM)
+# =============================================================================
+def get_feedback(user_id: str, file, prompt: str) -> dict:
+    """
+    Generate structured feedback on a student's submission.
+
+    Args:
+        user_id: who submitted it.
+        file:    a Streamlit UploadedFile (has .name, .type, .getvalue()).
+        prompt:  the assignment prompt and/or rubric the student pasted in.
+
+    Returns a dict:
+        {
+          "summary": str,
+          "strengths": [str, ...],
+          "improvements": [str, ...],
+          "suggestions": [str, ...],
+          "sources": [{"file": str, "page": int, "snippet": str}, ...],
+        }
+    """
+    _check_user(user_id)
+    if file is None:
+        raise BackendError("Please upload a file to get feedback on.")
+
+    if config.USE_MOCK_BACKEND:
+        time.sleep(2)  # pretend the LLM is thinking
+        size_kb = len(file.getvalue()) / 1024
+        has_prompt = bool(prompt and prompt.strip())
+        return {
+            "summary": (
+                f"I reviewed **{file.name}** ({size_kb:.1f} KB)"
+                + (" against the assignment prompt/rubric you provided." if has_prompt
+                   else ". No rubric was provided, so I used general course expectations.")
+            ),
+            "strengths": [
+                "Clear structure: the main sections are easy to follow.",
+                "Good use of course terminology in the core explanation.",
+                "The scope of the work matches what the assignment asks for.",
+            ],
+            "improvements": [
+                "Some claims need evidence or a citation to course readings.",
+                "The evaluation section is thin - add measurable results.",
+                "A few paragraphs repeat the same point; tighten the writing.",
+            ],
+            "suggestions": [
+                "Add a short table comparing your approach to one alternative.",
+                "Define success metrics explicitly (e.g., latency, concurrency).",
+                "Re-read the rubric and map each criterion to a heading.",
+            ],
+            "sources": _DEFAULT_SOURCES,
+        }
+
+    if config.USE_OPENAI:
+        import json
+
+        import openai
+
+        text = _extract_text(file)
+        if not text:
+            raise BackendError(f"{file.name} doesn't contain any readable text.")
+        user_msg = (
+            f"Assignment prompt / rubric:\n{prompt.strip() if prompt else '(none provided)'}"
+            f"\n\nSubmission ({file.name}):\n{text}"
+        )
+        try:
+            resp = _client().chat.completions.create(
+                model=config.OPENAI_MODEL,
+                messages=[
+                    {"role": "user", "content": user_msg},
+                ],
+                response_format={"type": "json_object"},
+            )
+        except openai.OpenAIError as err:
+            raise _openai_error(err) from err
+        try:
+            result = json.loads(resp.choices[0].message.content or "{}")
+        except json.JSONDecodeError:
+            raise BackendError("The AI model returned feedback in an unexpected format. Try again.")
+
+        def _as_list(value) -> list[str]:
+            return [str(v) for v in value] if isinstance(value, list) else []
+
+        return {
+            "summary": str(result.get("summary", "")),
+            "strengths": _as_list(result.get("strengths")),
+            "improvements": _as_list(result.get("improvements")),
+            "suggestions": _as_list(result.get("suggestions")),
+            "sources": [],
+        }
+
+    # ---- REAL BACKEND -------------------------------------------------------
+    # TODO (feedback agent teammate): the agent should extract text from the file,
+    #   retrieve relevant course material (RAG), and have the LLM return the JSON
+    #   shape documented above. Ask the LLM for JSON output and validate it.
+    resp = _http_post(
+        "/feedback",
+        data={"user_id": user_id, "prompt": prompt or ""},
+        files={"file": (file.name, file.getvalue(), file.type or "application/octet-stream")},
+    )
+    return resp.json()
