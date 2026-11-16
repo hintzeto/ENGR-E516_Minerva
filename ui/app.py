@@ -66,7 +66,9 @@ with st.sidebar:
 pages = [
     st.Page("pages/home.py", title="Home", icon="🏠", default=True),
     st.Page("pages/tutor.py", title="Tutor", icon="🎓"),
-    st.Page("pages/materials.py", title="Course Materials", icon="📚")
+    st.Page("pages/materials.py", title="Course Materials", icon="📚"), 
+    st.Page("pages/feedback.py", title="Feedback", icon="📝"), 
+    st.Page("pages/resources.py", title="Resource Management", icon="🗓️")
     
 ]
 selected_page = st.navigation(pages)
