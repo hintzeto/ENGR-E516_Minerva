@@ -200,7 +200,18 @@ def _http_post(path: str, **kwargs):
     except requests.exceptions.Timeout:
         raise BackendError("The Minerva server took too long to respond. Please try again.")
     except requests.exceptions.HTTPError as err:
-        raise BackendError(f"The server returned an error ({err.response.status_code}).")
+        raise BackendError(_api_error_message(err.response))
+
+
+def _api_error_message(resp) -> str:
+    """Use the API's own message (FastAPI sends {"detail": "..."}) when it has one."""
+    try:
+        detail = resp.json().get("detail")
+        if isinstance(detail, str):
+            return detail
+    except ValueError:
+        pass
+    return f"The server returned an error ({resp.status_code})."
 
 def _http_get(path: str, **kwargs):
     import requests
@@ -229,6 +240,42 @@ def _http_delete(path: str, **kwargs):
         return resp
     except requests.exceptions.RequestException:
         raise BackendError("Could not complete that request. Please try again.")
+
+def _start_stream(resp) -> tuple[list[dict], Iterator[str]]:
+    """Read the API's NDJSON stream into (sources, token_stream)."""
+    import json
+
+    events = (json.loads(line)
+              for line in resp.iter_lines(chunk_size=None, decode_unicode=True) if line)
+    sources, first_text = [], None
+    for event in events:
+        kind = event.get("type")
+        if kind == "sources":
+            sources = event.get("sources", [])
+        elif kind == "error":
+            raise BackendError(event.get("message", "The AI model failed. Please try again."))
+        elif kind == "token":
+            first_text = event.get("text", "")
+            break
+        elif kind == "done":
+            break
+
+    def _rest() -> Iterator[str]:
+        if first_text:
+            yield first_text
+        try:
+            for event in events:
+                if event.get("type") == "token":
+                    yield event.get("text", "")
+                elif event.get("type") == "error":
+                    yield f"\n\n_({event.get('message', 'The answer was cut off.')})_"
+                    return
+                elif event.get("type") == "done":
+                    return
+        except Exception:
+            yield "\n\n_(The answer was cut off by a connection problem. Please try again.)_"
+
+    return sources, _rest()
 
 # =============================================================================
 # 1) TUTOR  (RAG over course materials + guardrailed LLM)
@@ -276,30 +323,12 @@ def chat_with_tutor(user_id: str, course: str, messages: list[dict]):
             
         return sources, _openai_stream(prompt_messages)
 
-    # ---- REAL BACKEND -------------------------------------------------------
-    # TODO (tutor agent teammate): POST to your LangGraph tutoring agent.
-    #   The agent should: (1) retrieve top-k chunks for `course` from the vector
-    #   store, (2) apply tutoring guardrails (guide, don't just give answers),
-    #   (3) stream tokens from llama.cpp / SGLang on JetStream2.
-    #   Expected response: JSON {"sources": [...]} on the first line, then
-    #   streamed text. Adjust this parsing to whatever your API actually does.
     resp = _http_post(
         "/tutor/chat",
         json={"user_id": user_id, "course": course, "messages": messages},
         stream=True,
     )
-    import json
-
-    lines = resp.iter_lines(decode_unicode=True)
-    first = next(lines, "{}")
-    sources = json.loads(first).get("sources", [])
-
-    def _stream() -> Iterator[str]:
-        for line in lines:
-            if line:
-                yield line + "\n"
-
-    return sources, _stream()
+    return _start_stream(resp)
 
 # =============================================================================
 # 2) COURSE MATERIALS  (upload / list / delete for the RAG index)
@@ -372,8 +401,8 @@ def delete_course_material(user_id: str, file_id: str) -> bool:
         return deleted
 
     # TODO (RAG teammate): remove the file AND its embedded chunks from the index.
-    _http_delete(f"/materials/{file_id}", params={"user_id": user_id})
-    return True
+    resp = _http_delete(f"/materials/{file_id}", params={"user_id": user_id})
+    return bool(resp.json().get("deleted", True))
 
 # =============================================================================
 # 2) RESOURCE MANAGEMENT  (scheduling / pacing agent)
@@ -430,23 +459,17 @@ def plan_resources(user_id: str, tasks: list[dict], message: str):
             )
         else:
             task_lines = "(no tasks in the planner yet)"
-        system = format(today=datetime.now().strftime("%A, %Y-%m-%d"))
-        user_msg = f"My planner tasks:\n{task_lines}\n\n{message}"
-        return _openai_stream([
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_msg},
-        ])
+        today = datetime.now().strftime("%A, %Y-%m-%d")
+        user_msg = f"Today is {today}.\n\nMy planner tasks:\n{task_lines}\n\n{message}"
+        return _openai_stream([{"role": "user", "content": user_msg}])
 
-    # ---- REAL BACKEND -------------------------------------------------------
-    # TODO (resource agent teammate): call your LangGraph scheduling agent. It can
-    #   use tools for calendar data, professor office hours, and compute quotas.
     resp = _http_post(
         "/resources/plan",
         json={"user_id": user_id, "tasks": tasks, "message": message},
         stream=True,
     )
-    return (line + "\n" for line in resp.iter_lines(decode_unicode=True) if line)
-
+    _, stream = _start_stream(resp)
+    return stream
 # =============================================================================
 # 3) PERSONALIZED FEEDBACK  (RAG + rubric-aware LLM)
 # =============================================================================
@@ -497,7 +520,7 @@ def get_feedback(user_id: str, file, prompt: str) -> dict:
                 "Define success metrics explicitly (e.g., latency, concurrency).",
                 "Re-read the rubric and map each criterion to a heading.",
             ],
-            "sources": _DEFAULT_SOURCES,
+            "sources": [],
         }
 
     if config.USE_OPENAI:
