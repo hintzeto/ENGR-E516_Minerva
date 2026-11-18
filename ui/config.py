@@ -18,8 +18,6 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return value.strip().lower() in ("1", "true", "yes", "on")
 
-# Database information
-DATABASE_URI = os.getenv("DATABASE_URI", "postgresql+psycopg://minerva:minerva@localhost:5432/minerva")
 
 # BACKEND_MODE: "mock" (fake data), "openai" (call a model directly), "api" (our backend)
 _legacy_mock = _env_bool("USE_MOCK_BACKEND", True)
@@ -34,6 +32,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 # Empty = api.openai.com. For SGLang/llama.cpp on Jetstream2: http://<gpu-vm>:30000/v1
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+# ---- Database (users and login) ---------------------------------------------
+# Point this at the database VM's private IP, e.g.
+#   postgresql+psycopg://minerva:<password>@10.0.0.20:5432/minerva
+DATABASE_URI = os.getenv("DATABASE_URI", "")
+
 # ---- Real backend settings (only used when USE_MOCK_BACKEND is False) ------
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))
@@ -55,10 +58,3 @@ MATERIAL_FILE_TYPES = ["pdf", "docx", "txt", "md", "pptx"]
 
 # Delay between streamed words in mock mode (seconds). Lower = faster typing.
 MOCK_STREAM_DELAY = 0.02
-
-# ---- Retrieval (course materials) ---------------------------------------------
-# Small local embedding model (384 numbers per text). Runs on CPU, no API key.
-EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
-EMBEDDING_CACHE_DIR = os.getenv("EMBEDDING_CACHE_DIR", "/app/models")
-MAX_CHUNK_CHARS = 1200   # long slides/pages are split into pieces of about this size
-MIN_SIMILARITY = 0.55   # below this, say "no good match" instead of showing weak results

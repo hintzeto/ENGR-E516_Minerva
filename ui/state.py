@@ -37,12 +37,10 @@ def init_user_state() -> None:
 
 def login(user) -> None:
     """
-    Log a user in (PLACEHOLDER).
+    Log in a user whose password app.py has already checked.
 
-    TODO (auth): replace with real authentication, e.g. IU CAS/SSO via OIDC,
-    streamlit-authenticator, or an API token check. Whatever you use, just make
-    sure it ends by setting st.session_state["user_id"] to a stable unique ID.
-    The rest of the app only relies on that one value.
+    `user` is a models.User row. "user_id" is its database id, "username" is the
+    name shown in the UI and returned by current_user().
     """
     st.session_state["user_id"] = user.id
     st.session_state["username"] = user.username

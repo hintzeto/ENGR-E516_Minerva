@@ -1,0 +1,45 @@
+services:
+  vllm:
+    # Generic x86_64 CPU image. This is a best-effort smoke test on EPYC Milan;
+    # check README.md because current vLLM docs list Zen 4 / AVX-512 as the AMD CPU requirement.
+    image: ${VLLM_IMAGE:-vllm/vllm-openai-cpu:latest-x86_64}
+    container_name: minerva-vllm
+    restart: unless-stopped
+    command:
+      - ${VLLM_MODEL_ID:-Qwen/Qwen3-0.6B}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --dtype
+      - ${VLLM_DTYPE:-float32}
+      - --max-model-len
+      - ${VLLM_MAX_MODEL_LEN:-2048}
+      - --max-num-seqs
+      - ${VLLM_MAX_NUM_SEQS:-1}
+      - --api-key
+      - ${VLLM_API_KEY:?Set VLLM_API_KEY in .env}
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_CPU_KVCACHE_SPACE: ${VLLM_CPU_KVCACHE_SPACE:-2}
+      VLLM_CPU_OMP_THREADS_BIND: ${VLLM_CPU_OMP_THREADS_BIND:-auto}
+    volumes:
+      - model-cache:/root/.cache/huggingface
+    ports:
+      # Set VLLM_BIND_IP to this VM's Jetstream private IP.
+      # Keep the Jetstream security group limited to authorized private callers.
+      - "${VLLM_BIND_IP:-127.0.0.1}:${VLLM_HOST_PORT:-8000}:8000"
+    shm_size: "4gb"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15m
+
+volumes:
+  model-cache:
