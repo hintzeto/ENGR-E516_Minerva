@@ -9,7 +9,7 @@ def get_llm() -> ChatOpenAI:
     return ChatOpenAI(
         model = config.OPENAI_MODEL, 
         base_url = config.OPENAI_BASE_URL, 
-        api_key = config.OPENAI_API_KEY, 
+        api_key = config.OPENAI_API_KEY or "not-needed", 
         timeout = config.REQUEST_TIMOUT_SECONDS, 
         max_retries = 1
     )
