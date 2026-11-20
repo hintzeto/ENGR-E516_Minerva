@@ -1,20 +1,43 @@
-from functools import lru_cache
+"""
+llm.py - The one place the API connects to the model.
+
+Each call is an HTTP POST to {OPENAI_BASE_URL}/chat/completions, so the same code
+works with vLLM, Gemini's OpenAI-compatible endpoint, OpenAI, or SGLang.
+"""
+from typing import AsyncIterator
+
 import openai
-from langchain_openai import ChatOpenAI 
-from . import config 
+from openai import AsyncOpenAI
 
-@lru_cache 
-def get_llm() -> ChatOpenAI: 
-    """Create chat model client once and reuse it"""
-    return ChatOpenAI(
-        model = config.OPENAI_MODEL, 
-        base_url = config.OPENAI_BASE_URL, 
-        api_key = config.OPENAI_API_KEY or "not-needed", 
-        timeout = config.REQUEST_TIMOUT_SECONDS, 
-        max_retries = 1
-    )
+from . import config
 
-def custom_error(err: Exception) -> str: 
+# One client, shared by every request. It keeps connections open for reuse.
+_client = AsyncOpenAI(
+    base_url=config.OPENAI_BASE_URL,
+    # Self-hosted servers often don't check keys, but the client needs a value.
+    api_key=config.OPENAI_API_KEY or "not-needed",
+    timeout=config.REQUEST_TIMOUT_SECONDS,
+    max_retries=1,
+)
+
+
+async def stream(messages: list[dict]) -> AsyncIterator[str]:
+    """Send the conversation and yield the answer piece by piece."""
+    response = await _client.chat.completions.create(
+        model=config.OPENAI_MODEL, messages=messages, stream=True)
+    async for chunk in response:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+
+async def complete(messages: list[dict]) -> str:
+    """Send the conversation and return the whole answer at once."""
+    response = await _client.chat.completions.create(
+        model=config.OPENAI_MODEL, messages=messages)
+    return response.choices[0].message.content or ""
+
+
+def custom_error(err: Exception) -> str:
     """Turn a model error into a user friendly message"""
     if isinstance(err, openai.AuthenticationError):
         return "The AI model rejected API key. Check OPENAI_API_KEY in api/.env."

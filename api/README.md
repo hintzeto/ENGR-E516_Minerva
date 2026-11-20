@@ -1,7 +1,7 @@
 # Minerva API Stack
 
 ```
-Internet ──HTTPS──▶ Caddy ──▶ Streamlit UI ──▶ FastAPI + LangGraph ──HTTP──▶ model (vLLM / Gemini)
+Internet ──HTTPS──▶ Caddy ──▶ Streamlit UI ──▶ FastAPI agents ──HTTP──▶ model (vLLM / Gemini)
                      :80/443      ui:8501          api:8000                      │
                                                      └──────────▶ PostgreSQL + pgvector (planned)
 ```
@@ -20,7 +20,7 @@ api/
   app/main.py          # routes: /health, /tutor/chat, /resources/plan, /feedback, /materials
   app/llm.py           # the model client: HTTP POST to {OPENAI_BASE_URL}/chat/completions
   app/store.py         # course materials (in memory; pgvector replaces this)
-  app/agents/          # LangGraph agents: tutor.py (template), planner.py, feedback.py
+  app/agents/          # agents as plain functions: tutor.py, planner.py, feedback.py
 ```
 
 ## Configure
@@ -79,7 +79,7 @@ Stop with `docker compose down` (not `down -v`, which deletes Caddy's certificat
    ```
 6. **Test the model from the API container:**
    ```bash
-   docker compose exec api python -c "from app.llm import get_llm; print(get_llm().invoke('Say hi').content)"
+   docker compose exec api python -c "import asyncio; from app import llm; print(asyncio.run(llm.complete([{'role': 'user', 'content': 'Say hi'}])))"
    ```
 7. Open `https://<your-domain>` and test every page.
 
@@ -89,56 +89,41 @@ Stop with `docker compose down` (not `down -v`, which deletes Caddy's certificat
 **For the CPU vLLM** (`VLLM_MAX_MODEL_LEN=2048`), lower `MAX_CONTEXT_CHARS` in
 `api/app/config.py` to about `4_000`, or uploaded materials will overflow the model's context.
 
-## Integrating LangGraph agents
+## Agents
 
-Every agent in `app/agents/` has the same three parts. `tutor.py` is the template:
-
-```python
-class TutorState(TypedDict):                  # 1. State: data passed between nodes
-    user_id: str
-    course: str
-    messages: Annotated[list[AnyMessage], add_messages]
-    context: str
-    sources: list[dict]
-
-def retrieve(state): ...                      # 2. Nodes: return only the fields they change
-async def generate(state): ...
-
-graph = StateGraph(TutorState)                # 3. Graph: connect the nodes
-graph.add_node("retrieve", retrieve)
-graph.add_node("generate", generate)
-graph.add_edge(START, "retrieve")
-graph.add_edge("retrieve", "generate")
-graph.add_edge("generate", END)
-tutor_graph = graph.compile()
-```
-
-**Add a step** (e.g. a fact check that retries the answer):
+LangGraph was removed; Langflow is planned to take over the agent logic. Until then, each agent
+in `app/agents/` is a plain function that builds the messages and calls the model through
+`app/llm.py`:
 
 ```python
-def fact_check(state): ...                    # return {"verdict": "ok"} or {"verdict": "retry"}
-
-graph.add_node("fact_check", fact_check)
-graph.add_edge("generate", "fact_check")      # replaces generate → END
-graph.add_conditional_edges("fact_check", lambda s: s["verdict"],
-                            {"ok": END, "retry": "generate"})
+def tutor_answer(user_id, course, messages):
+    context, sources = store.material_context(user_id, course)   # find course materials
+    prompt = list(messages)
+    if context:
+        prompt.insert(0, {"role": "system",
+                          "content": "Course materials uploaded by the student:\n" + context})
+    return sources, llm.stream(prompt)                            # stream the answer
 ```
 
-Add `verdict: str` to the State. Only the node named in `answer_node` (in `main.py`) streams to
-students, so the fact check's own model calls stay hidden.
+| Agent | Function | Returns |
+|-------|----------|---------|
+| Tutor | `tutor_answer(user_id, course, messages)` | `(sources, token_stream)` |
+| Resource Management | `plan_answer(tasks, message)` | `token_stream` |
+| Feedback | `await feedback_answer(filename, submission, rubric)` | feedback dict |
 
-**Add an agent:**
+`llm.stream(messages)` yields the answer piece by piece; `await llm.complete(messages)` returns
+it whole. In `main.py`, `_stream_answer(chunks, sources)` turns a stream into the NDJSON events
+the UI reads.
 
-1. Copy `planner.py` (one node) or `tutor.py` (several) into `app/agents/`.
-2. Edit its State and nodes. Call the model with `await get_llm().ainvoke(messages)`.
-3. Add a route in `main.py`: streamed answers use `_stream_graph(graph, inputs, answer_node=...)`;
-   single results use `await graph.ainvoke(inputs)`.
-4. Add the matching call in `ui/backend.py`.
+**Add an agent:** write a function in `app/agents/` that calls `llm.stream` or `llm.complete`,
+add a route in `main.py` that uses it, and add the matching call in `ui/backend.py`.
 
-**Test an agent** without the UI, from `api/` with the venv active and `.env` loaded:
+**When Langflow arrives,** the routes and the UI stay the same: each agent function is replaced
+by an HTTP call to a Langflow flow (`POST /api/v1/run/<flow>?stream=true`).
+
+**Test without the UI,** from `api/` with the venv active and `.env` loaded:
 
 ```bash
-python -c "from app.agents.tutor import tutor_graph; print(tutor_graph.get_graph().draw_mermaid())"
 python -m uvicorn app.main:app --reload --port 8000     # then try routes at /docs
 ```
 
@@ -223,13 +208,13 @@ def material_context(user_id, course, question, k=5):
     return context, sources
 ```
 
-**6. Pass the question in `tutor.py`'s `retrieve` node:**
+**6. Pass the question in `tutor.py`:**
 
 ```python
-def retrieve(state):
-    question = state["messages"][-1].content
-    context, sources = store.material_context(state["user_id"], state["course"], question)
-    return {"context": context, "sources": sources}
+def tutor_answer(user_id, course, messages):
+    question = messages[-1]["content"]
+    context, sources = store.material_context(user_id, course, question)
+    ...
 ```
 
 **7. Test:**

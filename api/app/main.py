@@ -7,9 +7,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from . import config, store 
-from .agents.feedback import feedback_graph
-from .agents.planner import planner_graph
-from .agents.tutor import tutor_graph
+from .agents.feedback import feedback_answer
+from .agents.planner import plan_answer
+from .agents.tutor import tutor_answer
 from .llm import custom_error
 
 log = logging.getLogger("minerva.api")
@@ -42,18 +42,14 @@ def _line(event: dict) -> str:
     return json.dumps(event) + "\n"
 
 
-async def _stream_graph(graph, inputs: dict, answer_node: str) -> AsyncIterator[str]:
+async def _stream_answer(chunks: AsyncIterator[str],
+                         sources: list[dict] | None = None) -> AsyncIterator[str]:
+    """Turn an agent's answer into the NDJSON events the UI reads."""
+    if sources is not None:
+        yield _line({"type": "sources", "sources": sources})
     try:
-        async for mode, chunk in graph.astream(inputs, stream_mode=["updates", "messages"]):
-            if mode == "updates":
-                for update in chunk.values():
-                    if update and "sources" in update:
-                        yield _line({"type": "sources", "sources": update["sources"]})
-            elif mode == "messages":
-                message, meta = chunk
-                if meta.get("langgraph_node") == answer_node and isinstance(message.content, str) \
-                        and message.content:
-                    yield _line({"type": "token", "text": message.content})
+        async for text in chunks:
+            yield _line({"type": "token", "text": text})
         yield _line({"type": "done"})
     except Exception as err:
         log.exception("Agent failed")
@@ -73,16 +69,14 @@ def health():
 async def tutor_chat(req: TutorRequest):
     if not req.messages or req.messages[-1].role != "user":
         raise HTTPException(400, "The last message must be the student's question.")
-    inputs = {"user_id": req.user_id, "course": req.course,
-              "messages": [m.model_dump() for m in req.messages],
-              "context": "", "sources": []}
-    return _ndjson(_stream_graph(tutor_graph, inputs, answer_node="generate"))
+    sources, chunks = tutor_answer(req.user_id, req.course,
+                                   [m.model_dump() for m in req.messages])
+    return _ndjson(_stream_answer(chunks, sources))
 
 @app.post("/resources/plan")
 async def resources_plan(req: PlanRequest):
-    inputs = {"user_id": req.user_id, "tasks": [t.model_dump() for t in req.tasks],
-              "message": req.message, "reply": ""}
-    return _ndjson(_stream_graph(planner_graph, inputs, answer_node="plan"))
+    chunks = plan_answer([t.model_dump() for t in req.tasks], req.message)
+    return _ndjson(_stream_answer(chunks))
 
 
 async def _read_upload(file: UploadFile) -> bytes:
@@ -101,16 +95,13 @@ async def feedback(user_id: str = Form(...), prompt: str = Form(""), file: Uploa
         raise HTTPException(422, str(err))
     if not text:
         raise HTTPException(422, f"{file.filename} doesn't contain any readable text.")
-    inputs = {"user_id": user_id, "filename": file.filename, "submission": text,
-              "rubric": prompt, "result": {}}
     try:
-        state = await feedback_graph.ainvoke(inputs)
+        return await feedback_answer(file.filename, text, prompt)
     except json.JSONDecodeError:
         raise HTTPException(502, "The AI model returned feedback in an unexpected format. Try again.")
     except Exception as err:
         log.exception("Feedback agent failed")
         raise HTTPException(502, custom_error(err))
-    return state["result"]
 
 
 @app.post("/materials")
