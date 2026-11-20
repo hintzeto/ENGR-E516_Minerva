@@ -1,8 +1,44 @@
 services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:-http://localhost}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - ui
+
   ui:
     build: ./ui
-    ports:
-      - "8501:8501"
-    env_file:
-      - ./ui/.env
     restart: unless-stopped
+    expose:
+      - "8501"
+    env_file:
+      - path: ./ui/.env
+        required: false
+    environment:
+      BACKEND_MODE: ${UI_BACKEND_MODE:-api}
+      BACKEND_API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    expose:
+      - "8000"
+    env_file:
+      - path: ./api/.env
+        required: false
+
+volumes:
+  caddy_data:
+  caddy_config:
