@@ -109,7 +109,7 @@ async def feedback(user_id: str = Form(...), prompt: str = Form(""), file: Uploa
         raise HTTPException(502, "The AI model returned feedback in an unexpected format. Try again.")
     except Exception as err:
         log.exception("Feedback agent failed")
-        raise HTTPException(502, friendly_error(err))
+        raise HTTPException(502, custom_error(err))
     return state["result"]
 
 
