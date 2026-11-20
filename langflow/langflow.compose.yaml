@@ -1,0 +1,30 @@
+name: minerva-langflow
+
+services:
+  langflow:
+    image: langflowai/langflow:1.13.3
+    container_name: minerva-langflow
+
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+
+    env_file:
+      - langflow.env
+
+    ports:
+      - "${AGENTS_PRIVATE_IP:?Set AGENTS_PRIVATE_IP}:7860:7860"
+
+    volumes:
+      - ./langflow-data:/app/langflow
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health_check', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
