@@ -32,6 +32,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 # Empty = api.openai.com. For SGLang/llama.cpp on Jetstream2: http://<gpu-vm>:30000/v1
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+# ---- Database (users and login) ---------------------------------------------
+# Point this at the database VM's private IP, e.g.
+#   postgresql+psycopg://minerva:<password>@10.0.0.20:5432/minerva
+DATABASE_URI = os.getenv("DATABASE_URI", "")
+
 # ---- Real backend settings (only used when USE_MOCK_BACKEND is False) ------
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))
