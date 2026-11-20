@@ -1,0 +1,10 @@
+{$DOMAIN:http://localhost} {
+	encode zstd gzip
+
+	# Optional site-wide password; see the note at the end.
+	# basic_auth {
+	# 	minerva <paste-hash-here>
+	# }
+
+	reverse_proxy ui:8501
+}

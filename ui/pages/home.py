@@ -13,12 +13,29 @@ st.write(
     "and get feedback on your work before you submit it."
 )
 
-# Three feature cards side by side. st.page_link makes a clickable link to a page.
-with st.container(border=True):
-    st.subheader("🎓 Tutor")
-    st.write("Ask questions and get guided, course-specific help with "
+# 3 feature cards that link to the feature pages 
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    with st.container(border=True):
+        st.subheader("🗓️ Resource Management")
+        st.write("Plan your schedule, pace your work, and prioritize deadlines, "
+                 "office hours, and compute time.")
+        st.page_link("pages/resources.py", label="Open planner")
+
+with col2:
+    with st.container(border=True):
+        st.subheader("🎓 Tutor")
+        st.write("Ask questions and get guided, course-specific help with "
                  "sources from your materials.")
-    st.page_link("pages/tutor.py", label="Start tutoring")
+        st.page_link("pages/tutor.py", label="Start tutoring")
+
+with col3:
+    with st.container(border=True):
+        st.subheader("📝 Feedback")
+        st.write("Upload a draft and get structured feedback on strengths, "
+                 "weak spots, and next steps.")
+        st.page_link("pages/feedback.py", label="Get feedback")
 
 
 st.divider()
